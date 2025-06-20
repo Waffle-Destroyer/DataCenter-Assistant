@@ -1,0 +1,10 @@
+{
+    "name": "DataCenter Assistant",
+    "content_in_root": false,
+    "domain": "datacenter_assistant",
+    "integration_type": "integration",
+    "country": "de",
+    "render_readme": true,
+    "iot_class": "Local Polling",
+    "homeassistant": "2023.1.0"
+}

@@ -1,0 +1,21 @@
+{
+  "config": {
+    "flow_title": "DataCenter Assistant",
+    "step": {
+      "user": {
+        "title": "Setup VCF DataCenter Assistant",
+        "description": "Enter your VMware VCF connection details.",
+        "data": {
+          "vcf_url": "VCF URL",
+          "vcf_username": "VCF Username", 
+          "vcf_password": "VCF Password"
+        }
+      }
+    },
+    "error": {
+      "missing_vcf_url": "VCF URL is required",
+      "missing_vcf_username": "VCF Username is required", 
+      "missing_vcf_password": "VCF Password is required"
+    }
+  }
+}
