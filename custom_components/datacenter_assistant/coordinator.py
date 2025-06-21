@@ -196,9 +196,24 @@ class VCFCoordinatorManager:
                 current_version = releases_data.get("elements", [{}])[0].get("version") if releases_data.get("elements") else None
                 
                 if not current_version:
+                    _LOGGER.warning(f"Domain {domain.name}: No current version found")
                     domain.set_update_info(None, "error")
                     domain_updates[domain.id] = domain.update_dict()
                     continue
+                
+                # Validate current version format
+                from .utils import is_valid_version_format, validate_and_normalize_version
+                is_valid, normalized_version, error_msg = validate_and_normalize_version(current_version)
+                
+                if not is_valid:
+                    _LOGGER.error(f"Domain {domain.name}: Invalid current version '{current_version}': {error_msg}")
+                    domain.set_update_info(current_version, "error")
+                    domain_updates[domain.id] = domain.update_dict()
+                    continue
+                
+                # Use normalized version for consistency
+                current_version = normalized_version
+                _LOGGER.debug(f"Domain {domain.name}: Validated and normalized current version to '{current_version}'")
                 
                 # Set current version on domain BEFORE calling find_applicable_releases
                 domain.current_version = current_version
@@ -213,8 +228,20 @@ class VCFCoordinatorManager:
                 _LOGGER.info(f"Domain {domain.name}: Found {len(applicable_releases)} applicable releases")
                 
                 if applicable_releases:
-                    applicable_releases.sort(key=lambda x: version_tuple(x.get("version", "0.0.0.0")))
-                    domain.set_update_info(current_version, "updates_available", applicable_releases[0])
+                    # Validate the next release version format
+                    next_release = applicable_releases[0]
+                    next_version = next_release.get("version")
+                    
+                    is_next_valid, normalized_next_version, next_error_msg = validate_and_normalize_version(next_version)
+                    if not is_next_valid:
+                        _LOGGER.error(f"Domain {domain.name}: Invalid next release version '{next_version}': {next_error_msg}")
+                        domain.set_update_info(current_version, "error")
+                    else:
+                        # Update the next release with normalized version for consistency
+                        next_release["version"] = normalized_next_version
+                        applicable_releases.sort(key=lambda x: version_tuple(x.get("version", "0.0.0.0")))
+                        domain.set_update_info(current_version, "updates_available", applicable_releases[0])
+                        _LOGGER.debug(f"Domain {domain.name}: Next release version validated and normalized to '{normalized_next_version}'")
                 else:
                     domain.set_update_info(current_version, "up_to_date")
                 

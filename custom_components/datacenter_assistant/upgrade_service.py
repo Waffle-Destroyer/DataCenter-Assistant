@@ -129,6 +129,16 @@ class VCFUpgradeService:
             if not target_version:
                 raise ValueError("No target version found in next_release")
             
+            # Validate target version format
+            from .utils import validate_and_normalize_version
+            is_valid, normalized_version, error_msg = validate_and_normalize_version(target_version)
+            if not is_valid:
+                raise ValueError(f"Invalid target version '{target_version}': {error_msg}")
+            
+            # Use normalized version
+            target_version = normalized_version
+            _LOGGER.info(f"Domain {domain_id}: Target version validated and normalized to '{target_version}'")
+            
             # Step 1: Target the next VCF version
             await self._target_vcf_version(domain_id, target_version)
             
@@ -243,18 +253,33 @@ class VCFUpgradeService:
                     else:
                         raise Exception(f"Failed to start download for bundle {bundle_id}: {e}")
                 
-                # Wait for download completion
+                # Wait for download completion with enhanced progress tracking
+                download_start_time = time.time()
+                progress_check_count = 0
+                
                 while True:
                     bundle_status = await self.vcf_client.api_request(f"/v1/bundles/{bundle_id}")
                     download_status = bundle_status.get("downloadStatus")
+                    progress_check_count += 1
+                    elapsed_time = time.time() - download_start_time
+                    elapsed_minutes = int(elapsed_time / 60)
                     
                     if download_status == "SUCCESSFUL":
                         downloaded += 1
                         self.set_upgrade_logs(domain_id, 
-                            f"**Downloading Bundles**\n\nProgress: {downloaded}/{total_bundles} bundles downloaded...")
+                            f"**Downloading Bundles**\n\nProgress: {downloaded}/{total_bundles} bundles downloaded... "
+                            f"(bundle {downloaded} completed in {elapsed_minutes}m)")
+                        _LOGGER.info(f"Domain {domain_id}: Bundle {bundle_id} downloaded successfully in {elapsed_minutes} minutes")
                         break
                     elif download_status == "FAILED":
                         raise Exception(f"Bundle download failed for bundle {bundle_id}")
+                    
+                    # Update progress every 5 checks (2.5 minutes)
+                    if progress_check_count % 5 == 0:
+                        self.set_upgrade_logs(domain_id, 
+                            f"**Downloading Bundles**\n\nProgress: {downloaded}/{total_bundles} bundles downloaded... "
+                            f"(bundle {downloaded + 1} downloading for {elapsed_minutes}m)")
+                        _LOGGER.info(f"Domain {domain_id}: Bundle {bundle_id} still downloading, elapsed: {elapsed_minutes} minutes")
                     
                     await asyncio.sleep(30)  # Check every 30 seconds
             

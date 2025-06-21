@@ -183,6 +183,17 @@ class VCFDomain:
                     release_tuple = version_tuple(release_version)
                     min_compatible_tuple = version_tuple(min_compatible_version)
                     
+                    # Check if any version parsing failed
+                    if current_tuple is None:
+                        _LOGGER.warning(f"Domain {self.name}: Invalid current version format '{self.current_version}', skipping version comparison")
+                        continue
+                    if release_tuple is None:
+                        _LOGGER.warning(f"Domain {self.name}: Invalid release version format '{release_version}', skipping this release")
+                        continue
+                    if min_compatible_tuple is None:
+                        _LOGGER.warning(f"Domain {self.name}: Invalid min compatible version format '{min_compatible_version}', skipping this release")
+                        continue
+                    
                     if release_tuple > current_tuple >= min_compatible_tuple:
                         applicable_releases.append(release)
                         _LOGGER.debug(f"Domain {self.name}: Release {release_version} is applicable")

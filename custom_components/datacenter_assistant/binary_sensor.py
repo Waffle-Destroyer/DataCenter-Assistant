@@ -84,7 +84,8 @@ class VCFConnectionBinarySensor(CoordinatorEntity, BinarySensorEntity):
             _LOGGER.info("VCF Connection sensor: Preserving connection state during SDDC Manager upgrade")
             self._last_known_state = self._get_connection_state()
             self._api_outage_active = True
-            self.async_schedule_update_ha_state()
+            # Schedule state update safely on the event loop
+            self.hass.loop.call_soon_threadsafe(self.async_schedule_update_ha_state)
     
     def _handle_api_restored(self, event):
         """Handle notification of API restoration."""
@@ -92,7 +93,8 @@ class VCFConnectionBinarySensor(CoordinatorEntity, BinarySensorEntity):
         _LOGGER.info(f"VCF Connection sensor: API restored, reason: {reason}")
         self._api_outage_active = False
         self._last_known_state = None
-        self.async_schedule_update_ha_state()
+        # Schedule state update safely on the event loop
+        self.hass.loop.call_soon_threadsafe(self.async_schedule_update_ha_state)
     
     def _get_connection_state(self):
         """Get the actual connection state from coordinator data."""

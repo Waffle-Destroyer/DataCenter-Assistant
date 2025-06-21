@@ -24,11 +24,37 @@ def truncate_description(text, max_length=61):
         return text
     return text[:max_length] + "..."
 
+def is_valid_version_format(version_string):
+    """Validate if version string follows proper X.X.X.X format."""
+    if not version_string or not isinstance(version_string, str):
+        return False
+    
+    parts = version_string.split('.')
+    # Must have at least 1 part, max 4 parts
+    if len(parts) < 1 or len(parts) > 4:
+        return False
+    
+    # All parts must be numeric
+    for part in parts:
+        if not part.isdigit():
+            return False
+    
+    return True
+
 def version_tuple(version_string):
-    """Convert version string to tuple for comparison."""
+    """Convert version string to tuple for comparison.
+    
+    Returns:
+        tuple: Integer tuple for valid versions, None for invalid versions
+    """
     if not version_string:
         _LOGGER.debug("Empty version string provided, returning default (0,0,0,0)")
         return (0, 0, 0, 0)
+    
+    # Validate version format first
+    if not is_valid_version_format(version_string):
+        _LOGGER.warning(f"Invalid version format '{version_string}': Must follow X.X.X.X pattern with numeric parts")
+        return None
     
     parts = version_string.split('.')
     # Normalize to 4 parts
@@ -40,9 +66,9 @@ def version_tuple(version_string):
         _LOGGER.debug(f"Converted version '{version_string}' to tuple {result}")
         return result
     except ValueError as e:
-        # Handle non-numeric version parts
-        _LOGGER.warning(f"Non-numeric version parts in '{version_string}': {e}, returning string tuple")
-        return tuple(parts[:4])
+        # This should not happen due to pre-validation, but just in case
+        _LOGGER.error(f"Unexpected error converting version '{version_string}' to tuple: {e}")
+        return None
 
 def safe_name_conversion(name):
     """Convert domain/host names to safe entity names."""
@@ -88,3 +114,50 @@ def create_base_entity_attributes(domain_id, domain_name, domain_prefix):
         "domain_name": domain_name, 
         "domain_prefix": domain_prefix
     }
+
+def validate_and_normalize_version(version_string):
+    """Validate and normalize a version string.
+    
+    Args:
+        version_string: The version string to validate
+        
+    Returns:
+        tuple: (is_valid, normalized_version, error_message)
+    """
+    if not version_string or not isinstance(version_string, str):
+        return False, None, "Version string is empty or not a string"
+    
+    # Remove whitespace
+    version_string = version_string.strip()
+    
+    if not version_string:
+        return False, None, "Version string is empty after trimming"
+    
+    parts = version_string.split('.')
+    
+    # Must have at least 1 part, max 4 parts
+    if len(parts) < 1:
+        return False, None, "Version string has no parts"
+    
+    if len(parts) > 4:
+        return False, None, f"Version string has too many parts ({len(parts)}), maximum is 4"
+    
+    # All parts must be numeric
+    for i, part in enumerate(parts):
+        if not part.isdigit():
+            return False, None, f"Part {i+1} '{part}' is not numeric"
+        
+        # Check for reasonable bounds (0-9999)
+        try:
+            part_int = int(part)
+            if part_int < 0 or part_int > 9999:
+                return False, None, f"Part {i+1} '{part}' is out of reasonable range (0-9999)"
+        except ValueError:
+            return False, None, f"Part {i+1} '{part}' cannot be converted to integer"
+    
+    # Normalize to 4 parts
+    while len(parts) < 4:
+        parts.append('0')
+    
+    normalized = '.'.join(parts[:4])
+    return True, normalized, None
