@@ -17,6 +17,94 @@ class VCFAPIClient:
         self.vcf_url = config_entry.data.get("vcf_url")
         self.vcf_username = config_entry.data.get("vcf_username", "")
         self.vcf_password = config_entry.data.get("vcf_password", "")
+        
+        # Track API outage state for graceful handling during upgrades
+        self._is_sddc_upgrade_in_progress = False
+        self._api_outage_start_time = None
+        self._outage_timeout = 7200  # 2 hour timeout for SDDC Manager upgrades
+        
+        # Set up event listeners for API outage notifications
+        self._setup_api_outage_listeners()
+    
+    def _setup_api_outage_listeners(self):
+        """Set up event listeners for API outage notifications from upgrade service."""
+        self.hass.bus.async_listen("vcf_api_outage_expected", self._handle_api_outage_expected)
+        self.hass.bus.async_listen("vcf_api_restored", self._handle_api_restored)
+    
+    def _handle_api_outage_expected(self, event):
+        """Handle notification of expected API outage."""
+        reason = event.data.get("reason", "unknown")
+        domain_id = event.data.get("domain_id", "unknown")
+        
+        if reason == "sddc_manager_upgrade":
+            _LOGGER.info(f"VCF API Client: Received API outage notification for domain {domain_id} due to SDDC Manager upgrade")
+            self._is_sddc_upgrade_in_progress = True
+            self._api_outage_start_time = time.time()
+    
+    def _handle_api_restored(self, event):
+        """Handle notification of API restoration."""
+        reason = event.data.get("reason", "unknown")
+        domain_id = event.data.get("domain_id", "unknown")
+        
+        _LOGGER.info(f"VCF API Client: Received API restoration notification for domain {domain_id}, reason: {reason}")
+        self._is_sddc_upgrade_in_progress = False
+        self._api_outage_start_time = None
+        
+        # Immediately refresh token when API comes back online to ensure it's valid
+        if reason.startswith("sddc_manager_upgrade"):
+            _LOGGER.info("VCF API Client: Scheduling immediate token refresh after SDDC Manager upgrade")
+            # Schedule token refresh on the event loop
+            async def refresh_token_async():
+                try:
+                    await self.refresh_token()
+                    _LOGGER.info("VCF API Client: Token refreshed successfully after API restoration")
+                except Exception as e:
+                    _LOGGER.warning(f"VCF API Client: Failed to refresh token after API restoration: {e}")
+            
+            if hasattr(self.hass, 'loop') and self.hass.loop.is_running():
+                self.hass.loop.call_soon_threadsafe(
+                    lambda: self.hass.async_create_task(refresh_token_async())
+                )
+            else:
+                # Fallback for non-async context
+                pass
+    
+    def _is_upgrade_in_progress(self):
+        """Check if any domain has an SDDC Manager upgrade in progress."""
+        try:
+            # Primary check: Are we in a known SDDC upgrade state via events?
+            if self._is_sddc_upgrade_in_progress and self._api_outage_start_time:
+                # Check if we're within the timeout window
+                if time.time() - self._api_outage_start_time < self._outage_timeout:
+                    return True
+                else:
+                    _LOGGER.warning("VCF API Client: API outage timeout exceeded, resuming normal operations")
+                    self._api_outage_start_time = None
+                    self._is_sddc_upgrade_in_progress = False
+                    return False
+            
+            # Fallback check: Look for SDDC Manager upgrade in progress via upgrade service
+            upgrade_service = self.hass.data.get("datacenter_assistant", {}).get("upgrade_service")
+            if not upgrade_service:
+                return False
+            
+            # Check all domains for SDDC Manager upgrade status
+            for domain_id in upgrade_service._upgrade_states:
+                status = upgrade_service.get_upgrade_status(domain_id)
+                if status == "upgrading_sddcmanager":
+                    if self._api_outage_start_time is None:
+                        self._api_outage_start_time = time.time()
+                        _LOGGER.info("VCF API Client: SDDC Manager upgrade detected (fallback), enabling graceful API handling")
+                    return True
+            
+            return False
+        except Exception as e:
+            _LOGGER.debug(f"VCF API Client: Error checking upgrade status: {e}")
+            return False
+    
+    def _should_silence_token_refresh(self):
+        """Determine if token refresh should be silenced during expected API outage."""
+        return self._is_upgrade_in_progress()
     
     async def get_session_with_headers(self):
         """Get session with current authentication headers."""
@@ -25,8 +113,12 @@ class VCFAPIClient:
         
         # Check if token expires in less than 10 minutes
         if current_expiry > 0 and time.time() > current_expiry - 600:
-            _LOGGER.info("VCF token will expire soon, refreshing proactively")
-            current_token = await self.refresh_token()
+            # Don't attempt proactive token refresh during SDDC Manager upgrades
+            if self._should_silence_token_refresh():
+                _LOGGER.debug("VCF token will expire soon, but silencing refresh during SDDC Manager upgrade")
+            else:
+                _LOGGER.info("VCF token will expire soon, refreshing proactively")
+                current_token = await self.refresh_token()
         
         session = async_get_clientsession(self.hass)
         headers = {
@@ -36,9 +128,14 @@ class VCFAPIClient:
         return session, headers
     
     async def refresh_token(self):
-        """Refresh VCF API token."""
+        """Refresh VCF API token with upgrade-aware handling."""
         if not self.vcf_url or not self.vcf_username or not self.vcf_password:
             _LOGGER.warning("Cannot refresh VCF token: Missing credentials")
+            return None
+        
+        # Silence token refresh attempts during SDDC Manager upgrades
+        if self._should_silence_token_refresh():
+            _LOGGER.debug("Silencing VCF token refresh during SDDC Manager upgrade (API unavailable)")
             return None
             
         try:
@@ -52,7 +149,11 @@ class VCFAPIClient:
             
             async with session.post(login_url, json=auth_data, ssl=False) as resp:
                 if resp.status != 200:
-                    _LOGGER.error(f"VCF token refresh failed: {resp.status}")
+                    # Check if this is during an upgrade before logging error
+                    if self._is_upgrade_in_progress():
+                        _LOGGER.debug(f"VCF token refresh silently failed during SDDC Manager upgrade: {resp.status}")
+                    else:
+                        _LOGGER.error(f"VCF token refresh failed: {resp.status}")
                     return None
                     
                 token_data = await resp.json()
@@ -76,57 +177,84 @@ class VCFAPIClient:
                     _LOGGER.warning("Could not extract token from response")
                     return None
         except Exception as e:
-            _LOGGER.error(f"Error refreshing VCF token: {e}")
+            # Check if this is during an upgrade before logging error
+            if self._is_upgrade_in_progress():
+                _LOGGER.debug(f"VCF token refresh silently failed during SDDC Manager upgrade: {e}")
+            else:
+                _LOGGER.error(f"Error refreshing VCF token: {e}")
             return None
     
     async def api_request(self, endpoint, method="GET", data=None, params=None):
-        """Make a VCF API request with automatic token handling."""
+        """Make a VCF API request with automatic token handling and upgrade-aware error handling."""
         if not self.vcf_url:
             raise ValueError("VCF URL not configured")
         
         session, headers = await self.get_session_with_headers()
         url = f"{self.vcf_url}{endpoint}"
         
-        async with getattr(session, method.lower())(
-            url, headers=headers, json=data, params=params, ssl=False
-        ) as resp:
-            if resp.status == 401:
-                # Try refreshing token once
-                _LOGGER.info("Token expired, refreshing...")
-                new_token = await self.refresh_token()
-                if new_token:
-                    headers["Authorization"] = f"Bearer {new_token}"
-                    async with getattr(session, method.lower())(
-                        url, headers=headers, json=data, params=params, ssl=False
-                    ) as retry_resp:
-                        if retry_resp.status not in [200, 202, 204]:
-                            error_text = await retry_resp.text()
-                            _LOGGER.error(f"API request failed after token refresh: {retry_resp.status} - {error_text}")
-                            raise aiohttp.ClientError(f"API request failed: {retry_resp.status}")
-                        
-                        # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE
-                        try:
-                            return await retry_resp.json()
-                        except aiohttp.ContentTypeError:
-                            if method.upper() in ['PATCH', 'PUT', 'DELETE'] and retry_resp.status in [200, 202, 204]:
-                                return {"status": "success", "message": f"Operation completed with status {retry_resp.status}"}
-                            else:
-                                raise
-                else:
-                    raise aiohttp.ClientError("Failed to refresh token")
-            elif resp.status not in [200, 202, 204]:
-                error_text = await resp.text()
-                _LOGGER.error(f"API request failed: {resp.status} - {error_text}")
-                raise aiohttp.ClientError(f"API request failed: {resp.status}")
-            else:
-                # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE
-                try:
-                    return await resp.json()
-                except aiohttp.ContentTypeError:
-                    if method.upper() in ['PATCH', 'PUT', 'DELETE'] and resp.status in [200, 202, 204]:
-                        return {"status": "success", "message": f"Operation completed with status {resp.status}"}
+        try:
+            async with getattr(session, method.lower())(
+                url, headers=headers, json=data, params=params, ssl=False
+            ) as resp:
+                if resp.status == 401:
+                    # Try refreshing token once
+                    if self._should_silence_token_refresh():
+                        _LOGGER.debug("Token expired during SDDC Manager upgrade, silencing token refresh attempt")
+                        raise aiohttp.ClientError("API unavailable during SDDC Manager upgrade")
+                    
+                    _LOGGER.info("Token expired, refreshing...")
+                    new_token = await self.refresh_token()
+                    if new_token:
+                        headers["Authorization"] = f"Bearer {new_token}"
+                        async with getattr(session, method.lower())(
+                            url, headers=headers, json=data, params=params, ssl=False
+                        ) as retry_resp:
+                            if retry_resp.status not in [200, 202, 204]:
+                                error_text = await retry_resp.text()
+                                # Check if this is during an upgrade before logging error
+                                if self._is_upgrade_in_progress():
+                                    _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade after token refresh: {retry_resp.status}")
+                                else:
+                                    _LOGGER.error(f"API request failed after token refresh: {retry_resp.status} - {error_text}")
+                                raise aiohttp.ClientError(f"API request failed: {retry_resp.status}")
+                            
+                            # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE
+                            try:
+                                return await retry_resp.json()
+                            except aiohttp.ContentTypeError:
+                                if method.upper() in ['PATCH', 'PUT', 'DELETE'] and retry_resp.status in [200, 202, 204]:
+                                    return {"status": "success", "message": f"Operation completed with status {retry_resp.status}"}
+                                else:
+                                    raise
                     else:
-                        raise
+                        raise aiohttp.ClientError("Failed to refresh token")
+                elif resp.status not in [200, 202, 204]:
+                    error_text = await resp.text()
+                    # Check if this is during an upgrade before logging error
+                    if self._is_upgrade_in_progress():
+                        _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade: {resp.status}")
+                    else:
+                        _LOGGER.error(f"API request failed: {resp.status} - {error_text}")
+                    raise aiohttp.ClientError(f"API request failed: {resp.status}")
+                else:
+                    # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE
+                    try:
+                        return await resp.json()
+                    except aiohttp.ContentTypeError:
+                        if method.upper() in ['PATCH', 'PUT', 'DELETE'] and resp.status in [200, 202, 204]:
+                            return {"status": "success", "message": f"Operation completed with status {resp.status}"}
+                        else:
+                            raise
+        except aiohttp.ClientError:
+            # Re-raise ClientError as-is for coordinator handling
+            raise
+        except Exception as e:
+            # Handle other exceptions (connection errors, timeouts, etc.)
+            if self._is_upgrade_in_progress():
+                _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade: {e}")
+            else:
+                _LOGGER.error(f"API request failed: {e}")
+            raise aiohttp.ClientError(f"API request failed: {e}")
 
 
 class VCFDomain:

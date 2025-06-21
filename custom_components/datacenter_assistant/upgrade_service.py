@@ -865,14 +865,23 @@ Waiting for acknowledgement..."""
             else:
                 fire_api_outage_event()
             
-            # Monitor upgrade progress
+            # Monitor upgrade progress with timeout
             check_count = 0
             api_available = True
             last_connectivity_check = 0
+            start_time = time.time()
+            max_upgrade_time = 7200  # 2 hours timeout
             
             while True:
                 check_count += 1
-                _LOGGER.debug(f"Domain {domain_id}: SDDC Manager upgrade status check #{check_count}")
+                elapsed_time = time.time() - start_time
+                
+                # Check for overall timeout
+                if elapsed_time > max_upgrade_time:
+                    _LOGGER.error(f"Domain {domain_id}: SDDC Manager upgrade timeout after {elapsed_time:.0f} seconds")
+                    raise Exception(f"SDDC Manager upgrade timeout after {elapsed_time:.0f} seconds")
+                
+                _LOGGER.debug(f"Domain {domain_id}: SDDC Manager upgrade status check #{check_count} (elapsed: {elapsed_time:.0f}s)")
                 
                 try:
                     status_response = await self.vcf_client.api_request(f"/v1/upgrades/{upgrade_id}")
@@ -909,7 +918,8 @@ Waiting for acknowledgement..."""
                     if api_available:
                         _LOGGER.info(f"Domain {domain_id}: API became unavailable during SDDC Manager upgrade (expected): {api_error}")
                         api_available = False
-                      # Periodically test if API is back online (every 5 minutes)
+                        
+                    # Periodically test if API is back online (every 5 minutes)
                     current_time = check_count * 30  # 30 seconds per check
                     if current_time - last_connectivity_check >= 300:  # 5 minutes
                         try:
@@ -929,7 +939,8 @@ Waiting for acknowledgement..."""
                                 self.hass.loop.call_soon_threadsafe(fire_api_restored_event)
                             else:
                                 fire_api_restored_event()
-                              # Wait additional 6 minutes for SDDC Manager to fully stabilize
+                                
+                            # Wait additional 6 minutes for SDDC Manager to fully stabilize
                             _LOGGER.info(f"Domain {domain_id}: Waiting 6 minutes for SDDC Manager to fully stabilize...")
                             await asyncio.sleep(360)
                             break
