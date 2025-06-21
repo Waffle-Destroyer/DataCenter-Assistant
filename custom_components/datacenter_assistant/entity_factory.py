@@ -79,8 +79,7 @@ class VCFDomainUpdateStatusSensor(VCFDomainBaseSensor):
             return "mdi:check-circle"
         elif state == "error":
             return "mdi:alert-circle"
-        else:
-            return "mdi:sync-alert"
+        else:            return "mdi:sync-alert"
     
     @property
     def extra_state_attributes(self):
@@ -96,6 +95,19 @@ class VCFDomainUpdateStatusSensor(VCFDomainBaseSensor):
                 "current_version": domain_data.get("current_version"),
                 "update_status": domain_data.get("update_status", "unknown")
             }
+            
+            # Check if we're using preserved state during API outage
+            try:
+                coordinator_manager = getattr(self.coordinator, '_coordinator_manager', None)
+                if (coordinator_manager and 
+                    hasattr(coordinator_manager, '_is_sddc_upgrade_in_progress') and
+                    coordinator_manager._is_sddc_upgrade_in_progress):
+                    attributes["state_preserved_during_upgrade"] = True
+                    attributes["preservation_reason"] = "SDDC Manager upgrade in progress"
+                else:
+                    attributes["state_preserved_during_upgrade"] = False
+            except:
+                attributes["state_preserved_during_upgrade"] = False
             
             next_release = domain_data.get("next_release")
             if next_release:

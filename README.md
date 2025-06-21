@@ -1,6 +1,6 @@
 # DataCenter Assistant
 
-[![GitHub Release](https://img.shields.io/github/release/kian2929/DataCenter-Assistant.svg)](https://github.com/kian2929/DataCenter-Assistant/releases)
+[![GitHub Release](https://img.shields.io/github/release/Waffle-Destroyer/DataCenter-Assistant.svg)](https://github.com/Waffle-Destroyer/DataCenter-Assistant/releases)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 
 A custom Home Assistant integration for monitoring and managing VMware Cloud Foundation (VCF) environments. This integration provides comprehensive monitoring of VCF domains, including update status, resource utilization, and automated upgrade workflows.
@@ -61,14 +61,14 @@ This automation integration was developed as a **proof of concept** for a projec
 1. Open HACS in your Home Assistant instance
 2. Click on "Integrations"
 3. Click the three dots menu and select "Custom repositories"
-4. Add the repository URL: `https://github.com/kian2929/DataCenter-Assistant`
+4. Add the repository URL: `https://github.com/Waffle-Destroyer/DataCenter-Assistant`
 5. Select "Integration" as the category
 6. Click "Add"
 7. Search for "DataCenter Assistant" and install
 
 ### Manual Installation
 
-1. Download the latest release from the [releases page](https://github.com/kian2929/DataCenter-Assistant/releases)
+1. Download the latest release from the [releases page](https://github.com/Waffle-Destroyer/DataCenter-Assistant/releases)
 2. Extract the `custom_components/datacenter_assistant` folder to your Home Assistant `custom_components` directory
 3. Restart Home Assistant
 

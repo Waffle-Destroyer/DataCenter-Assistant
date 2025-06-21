@@ -153,11 +153,22 @@ class VCFCoordinatorManager:
             
         except Exception as e:
             _LOGGER.error(f"Error in VCF update check workflow: {e}")
-            
-            # Check if we should preserve state during expected outage
+              # Check if we should preserve state during expected outage
             if self._should_preserve_state(e):
                 if self._last_successful_data:
                     _LOGGER.info("Preserving last known state during SDDC Manager upgrade API outage")
+                    # Log what we're preserving for verification
+                    domain_updates = self._last_successful_data.get("domain_updates", {})
+                    for domain_id, domain_data in domain_updates.items():
+                        domain_name = domain_data.get("domain_name", "Unknown")
+                        current_version = domain_data.get("current_version", "Unknown")
+                        update_status = domain_data.get("update_status", "Unknown")
+                        next_release = domain_data.get("next_release", {})
+                        next_version = next_release.get("version", "N/A") if next_release else "N/A"
+                        
+                        _LOGGER.debug(f"Preserving domain {domain_name}: status={update_status}, "
+                                    f"current_version={current_version}, next_version={next_version}")
+                    
                     return self._last_successful_data
                 else:
                     _LOGGER.warning("No previous state to preserve during API outage")
@@ -402,11 +413,14 @@ def get_coordinator(hass, config_entry):
         name="VCF Resources",
         update_method=coordinator_manager.fetch_resources_data,
         update_interval=timedelta(seconds=10),
-    )
-
-    # Store both coordinators globally for other components
+    )    # Store both coordinators globally for other components
     hass.data.setdefault(_DOMAIN, {})["coordinator"] = coordinator
     hass.data.setdefault(_DOMAIN, {})["resource_coordinator"] = resource_coordinator
+    hass.data.setdefault(_DOMAIN, {})["coordinator_manager"] = coordinator_manager
+    
+    # Store manager reference in coordinator for sensor access
+    coordinator._coordinator_manager = coordinator_manager
+    resource_coordinator._coordinator_manager = coordinator_manager
     
     _LOGGER.info(f"Created VCF coordinators - Upgrades: {coordinator.name}, Resources: {resource_coordinator.name}")
     _LOGGER.info(f"Resource coordinator update interval: {resource_coordinator.update_interval}")

@@ -1,12 +1,12 @@
 {
   "domain": "datacenter_assistant",
   "name": "DataCenter Assistant",
-  "version": "1.1.99",
+  "version": "1.0.1",
   "config_flow": true,
-  "documentation": "https://github.com/kian2929/DataCenter-Assistant",
+  "documentation": "https://github.com/Waffle-Destroyer/DataCenter-Assistant",
   "requirements": ["aiohttp>=3.8.0"],
   "dependencies": [],
-  "codeowners": ["@kian2929"],
+  "codeowners": ["@kian2929", "@frinteez", "@TimonvSt", "@Waffle-Destroyer"],
   "iot_class": "local_polling",
   "loggers": ["custom_components.datacenter_assistant"],
   "platforms": ["sensor", "binary_sensor", "button"]
