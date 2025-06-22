@@ -14,6 +14,7 @@
     },
     "error": {
       "missing_vcf_url": "VCF URL ist erforderlich",
+      "invalid_vcf_url": "VCF URL Format ist ungültig. Bitte verwenden Sie eine gültige URL (z.B. https://vcf-manager.example.com)",
       "missing_vcf_username": "VCF Benutzername ist erforderlich", 
       "missing_vcf_password": "VCF Passwort ist erforderlich"
     }

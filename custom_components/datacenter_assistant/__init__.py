@@ -4,6 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import time
+from .utils import build_vcf_api_url, normalize_vcf_url
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.debug("Initialized with log handlers: %s", logging.getLogger().handlers)
@@ -15,6 +16,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up DataCenter Assistant from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = entry
+
+    # Migrate existing config entries to ensure proper URL format
+    await _migrate_config_entry(hass, entry)
 
     # Configure logging
     logging.getLogger('custom_components.datacenter_assistant').setLevel(logging.CRITICAL)
@@ -29,6 +33,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_setup_services(hass, entry)
     
     return True
+
+async def _migrate_config_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Migrate existing config entries to ensure proper URL format."""
+    vcf_url = entry.data.get("vcf_url")
+    if not vcf_url:
+        return
+    
+    normalized_url = normalize_vcf_url(vcf_url)
+    
+    # If the URL changed after normalization, update the config entry
+    if normalized_url != vcf_url:
+        _LOGGER.info(f"Migrating VCF URL from '{vcf_url}' to '{normalized_url}'")
+        new_data = dict(entry.data)
+        new_data["vcf_url"] = normalized_url
+        hass.config_entries.async_update_entry(entry, data=new_data)
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
@@ -66,7 +85,10 @@ async def _validate_vcf_credentials(entry: ConfigEntry):
     if not vcf_url or not vcf_username or not vcf_password:
         return None, None, None
     
-    return vcf_url, vcf_username, vcf_password
+    # Normalize the URL to ensure proper format
+    normalized_url = normalize_vcf_url(vcf_url)
+    
+    return normalized_url, vcf_username, vcf_password
 
 async def _async_setup_services(hass: HomeAssistant, entry: ConfigEntry):
     """Set up services for VCF integration."""
@@ -82,7 +104,7 @@ async def _async_setup_services(hass: HomeAssistant, entry: ConfigEntry):
             
         try:
             session = async_get_clientsession(hass)
-            login_url = f"{vcf_url}/v1/tokens"
+            login_url = build_vcf_api_url(vcf_url, "/v1/tokens")
             
             auth_data = {
                 "username": vcf_username,
@@ -131,7 +153,7 @@ async def _async_setup_services(hass: HomeAssistant, entry: ConfigEntry):
         
         try:
             session = async_get_clientsession(hass)
-            api_url = f"{vcf_url}/v1/system/updates/{component_type.lower()}/{fqdn}/start"
+            api_url = build_vcf_api_url(vcf_url, f"/v1/system/updates/{component_type.lower()}/{fqdn}/start")
             
             headers = {
                 "Authorization": f"Bearer {current_token}",
@@ -170,7 +192,7 @@ async def _async_setup_services(hass: HomeAssistant, entry: ConfigEntry):
         
         try:
             session = async_get_clientsession(hass)
-            download_url = f"{vcf_url}/v1/bundles/{bundle_id}"
+            download_url = build_vcf_api_url(vcf_url, f"/v1/bundles/{bundle_id}")
             patch_data = {"operation": "DOWNLOAD"}
             
             headers = {

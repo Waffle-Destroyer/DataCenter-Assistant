@@ -1,6 +1,7 @@
 """Utility functions for the DataCenter Assistant integration."""
 import logging
 import aiohttp
+from urllib.parse import urlparse, urlunparse
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -11,6 +12,96 @@ RESOURCE_ICONS = {
     "storage": "mdi:harddisk",
     "default": "mdi:server"
 }
+
+def normalize_vcf_url(url):
+    """Normalize VCF URL to ensure proper format.
+    
+    Args:
+        url: The URL to normalize
+        
+    Returns:
+        str: Normalized URL with proper scheme and without trailing slash
+    """
+    if not url or not isinstance(url, str):
+        return url
+    
+    url = url.strip()
+    if not url:
+        return url
+    
+    # Add https if no scheme is provided
+    if not url.startswith(('http://', 'https://')):
+        url = f"https://{url}"
+    
+    # Parse and rebuild URL to handle any malformed parts
+    parsed = urlparse(url)
+    
+    # Remove trailing slash from path
+    path = parsed.path.rstrip('/') if parsed.path else ''
+    
+    # Rebuild URL without trailing slash
+    normalized = urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        path,
+        parsed.params,
+        parsed.query,
+        parsed.fragment
+    ))
+    
+    return normalized
+
+def build_vcf_api_url(base_url, endpoint):
+    """Build a VCF API URL by properly joining base URL and endpoint.
+    
+    Args:
+        base_url: The base VCF URL (will be normalized)
+        endpoint: The API endpoint (should start with /)
+        
+    Returns:
+        str: Properly formatted full URL
+    """
+    if not base_url or not endpoint:
+        raise ValueError("Both base_url and endpoint are required")
+    
+    # Normalize the base URL
+    normalized_base = normalize_vcf_url(base_url)
+    
+    # Ensure endpoint starts with /
+    if not endpoint.startswith('/'):
+        endpoint = f"/{endpoint}"
+    
+    # Combine URLs properly
+    return f"{normalized_base}{endpoint}"
+
+def validate_vcf_url(url):
+    """Validate VCF URL format.
+    
+    Args:
+        url: The URL to validate
+        
+    Returns:
+        tuple: (is_valid, normalized_url, error_message)
+    """
+    if not url or not isinstance(url, str):
+        return False, None, "URL is empty or not a string"
+    
+    try:
+        normalized = normalize_vcf_url(url)
+        parsed = urlparse(normalized)
+        
+        # Check if URL has a valid scheme
+        if parsed.scheme not in ('http', 'https'):
+            return False, None, "URL must use http or https scheme"
+        
+        # Check if URL has a valid netloc (hostname)
+        if not parsed.netloc:
+            return False, None, "URL must include a hostname"
+        
+        return True, normalized, None
+        
+    except Exception as e:
+        return False, None, f"Invalid URL format: {str(e)}"
 
 def get_resource_icon(resource_type):
     """Get the appropriate icon for a resource type."""

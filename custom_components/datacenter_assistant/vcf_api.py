@@ -3,7 +3,7 @@ import aiohttp
 import logging
 import time
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .utils import version_tuple
+from .utils import version_tuple, build_vcf_api_url, normalize_vcf_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -14,7 +14,9 @@ class VCFAPIClient:
     def __init__(self, hass, config_entry):
         self.hass = hass
         self.config_entry = config_entry
-        self.vcf_url = config_entry.data.get("vcf_url")
+        # Normalize VCF URL to ensure proper format
+        raw_url = config_entry.data.get("vcf_url")
+        self.vcf_url = normalize_vcf_url(raw_url) if raw_url else None
         self.vcf_username = config_entry.data.get("vcf_username", "")
         self.vcf_password = config_entry.data.get("vcf_password", "")
         
@@ -140,7 +142,7 @@ class VCFAPIClient:
             
         try:
             session = async_get_clientsession(self.hass)
-            login_url = f"{self.vcf_url}/v1/tokens"
+            login_url = build_vcf_api_url(self.vcf_url, "/v1/tokens")
             
             auth_data = {
                 "username": self.vcf_username,
@@ -190,7 +192,9 @@ class VCFAPIClient:
             raise ValueError("VCF URL not configured")
         
         session, headers = await self.get_session_with_headers()
-        url = f"{self.vcf_url}{endpoint}"
+        url = build_vcf_api_url(self.vcf_url, endpoint)
+        
+        _LOGGER.debug(f"Making VCF API request to: {url}")
         
         try:
             async with getattr(session, method.lower())(
@@ -213,9 +217,9 @@ class VCFAPIClient:
                                 error_text = await retry_resp.text()
                                 # Check if this is during an upgrade before logging error
                                 if self._is_upgrade_in_progress():
-                                    _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade after token refresh: {retry_resp.status}")
+                                    _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade after token refresh: {retry_resp.status} for URL: {url}")
                                 else:
-                                    _LOGGER.error(f"API request failed after token refresh: {retry_resp.status} - {error_text}")
+                                    _LOGGER.error(f"API request failed after token refresh: {retry_resp.status} - {error_text} for URL: {url}")
                                 raise aiohttp.ClientError(f"API request failed: {retry_resp.status}")
                             
                             # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE
@@ -232,9 +236,9 @@ class VCFAPIClient:
                     error_text = await resp.text()
                     # Check if this is during an upgrade before logging error
                     if self._is_upgrade_in_progress():
-                        _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade: {resp.status}")
+                        _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade: {resp.status} for URL: {url}")
                     else:
-                        _LOGGER.error(f"API request failed: {resp.status} - {error_text}")
+                        _LOGGER.error(f"API request failed: {resp.status} - {error_text} for URL: {url}")
                     raise aiohttp.ClientError(f"API request failed: {resp.status}")
                 else:
                     # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE

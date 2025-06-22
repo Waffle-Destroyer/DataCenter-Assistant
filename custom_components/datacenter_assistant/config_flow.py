@@ -2,6 +2,7 @@ from homeassistant import config_entries
 import voluptuous as vol
 import logging
 from . import DOMAIN
+from .utils import validate_vcf_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,9 +18,23 @@ class DataCenterAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.info("Processing DataCenter Assistant configuration submission")
             _LOGGER.debug(f"Received config data with URL: {user_input.get('vcf_url', 'NOT_PROVIDED')}")
             
-            # Validate VCF configuration
+            # Validate and normalize VCF URL
+            vcf_url = user_input.get('vcf_url', '').strip()
+            if not vcf_url:
+                _LOGGER.warning("Missing VCF URL")
+                errors['vcf_url'] = "missing_vcf_url"
+            else:
+                is_valid, normalized_url, error_msg = validate_vcf_url(vcf_url)
+                if not is_valid:
+                    _LOGGER.warning(f"Invalid VCF URL '{vcf_url}': {error_msg}")
+                    errors['vcf_url'] = "invalid_vcf_url"
+                else:
+                    # Update user input with normalized URL
+                    user_input['vcf_url'] = normalized_url
+                    _LOGGER.info(f"VCF URL normalized from '{vcf_url}' to '{normalized_url}'")
+            
+            # Validate other required fields
             required_fields = {
-                "vcf_url": "missing_vcf_url",
                 "vcf_username": "missing_vcf_username", 
                 "vcf_password": "missing_vcf_password"
             }
@@ -28,7 +43,6 @@ class DataCenterAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not user_input.get(field, "").strip():
                     _LOGGER.warning(f"Missing required field: {field}")
                     errors[field] = error_key
-                    break
             
             if not errors:
                 _LOGGER.info("DataCenter Assistant configuration validation successful")
