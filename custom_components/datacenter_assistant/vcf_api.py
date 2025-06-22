@@ -1,5 +1,6 @@
 """VCF API Client and Data Models for the DataCenter Assistant integration."""
 import aiohttp
+import asyncio
 import logging
 import time
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -186,7 +187,7 @@ class VCFAPIClient:
                 _LOGGER.error(f"Error refreshing VCF token: {e}")
             return None
     
-    async def api_request(self, endpoint, method="GET", data=None, params=None):
+    async def api_request(self, endpoint, method="GET", data=None, params=None, timeout=None):
         """Make a VCF API request with automatic token handling and upgrade-aware error handling."""
         if not self.vcf_url:
             raise ValueError("VCF URL not configured")
@@ -196,9 +197,18 @@ class VCFAPIClient:
         
         _LOGGER.debug(f"Making VCF API request to: {url}")
         
+        # Set up timeout - use longer timeout for bundle operations
+        if timeout is None:
+            if "/bundles/" in endpoint:
+                # Bundle operations can take longer due to large file downloads
+                timeout = aiohttp.ClientTimeout(total=300)  # 5 minutes
+            else:
+                # Standard timeout for other operations
+                timeout = aiohttp.ClientTimeout(total=60)  # 1 minute
+        
         try:
             async with getattr(session, method.lower())(
-                url, headers=headers, json=data, params=params, ssl=False
+                url, headers=headers, json=data, params=params, ssl=False, timeout=timeout
             ) as resp:
                 if resp.status == 401:
                     # Try refreshing token once
@@ -211,7 +221,7 @@ class VCFAPIClient:
                     if new_token:
                         headers["Authorization"] = f"Bearer {new_token}"
                         async with getattr(session, method.lower())(
-                            url, headers=headers, json=data, params=params, ssl=False
+                            url, headers=headers, json=data, params=params, ssl=False, timeout=timeout
                         ) as retry_resp:
                             if retry_resp.status not in [200, 202, 204]:
                                 error_text = await retry_resp.text()
@@ -252,8 +262,16 @@ class VCFAPIClient:
         except aiohttp.ClientError:
             # Re-raise ClientError as-is for coordinator handling
             raise
+        except asyncio.TimeoutError as e:
+            # Handle timeout errors specifically - these may be expected for long-running operations
+            timeout_msg = f"Connection timeout to host {url}"
+            if self._is_upgrade_in_progress():
+                _LOGGER.debug(f"API request timeout during SDDC Manager upgrade: {timeout_msg}")
+            else:
+                _LOGGER.warning(f"API request timeout (this may be expected for long-running operations): {timeout_msg}")
+            raise aiohttp.ClientError(timeout_msg)
         except Exception as e:
-            # Handle other exceptions (connection errors, timeouts, etc.)
+            # Handle other exceptions (connection errors, etc.)
             if self._is_upgrade_in_progress():
                 _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade: {e}")
             else:
