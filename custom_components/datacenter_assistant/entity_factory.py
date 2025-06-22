@@ -61,29 +61,62 @@ class VCFDomainUpdateStatusSensor(VCFDomainBaseSensor):
     
     def __init__(self, coordinator, domain_id, domain_name, domain_prefix):
         super().__init__(coordinator, domain_id, domain_name, domain_prefix, "Status")
+        
+        # State preservation during API outages
+        self._last_known_state = None
+        self._last_known_attributes = None
+        self._api_outage_active = False
+        
+        # Listen for API outage events
+        self._remove_listeners = []
     
-    @property
-    def state(self):
-        """Return the update status of this domain."""
+    async def async_added_to_hass(self):
+        """Run when sensor is added to Home Assistant."""
+        await super().async_added_to_hass()
+        
+        # Listen for API outage events
+        self._remove_listeners.append(
+            self.hass.bus.async_listen("vcf_api_outage_expected", self._handle_api_outage_expected)
+        )
+        self._remove_listeners.append(
+            self.hass.bus.async_listen("vcf_api_restored", self._handle_api_restored)
+        )
+    
+    async def async_will_remove_from_hass(self):
+        """Run when sensor is removed from Home Assistant."""
+        for remove_listener in self._remove_listeners:
+            remove_listener()
+    
+    def _handle_api_outage_expected(self, event):
+        """Handle notification of expected API outage."""
+        reason = event.data.get("reason", "unknown")
+        if reason == "sddc_manager_upgrade":
+            _LOGGER.info(f"VCF {self._domain_prefix} Status sensor: Preserving state during SDDC Manager upgrade")
+            self._last_known_state = self._get_update_status()
+            self._last_known_attributes = self._get_update_attributes()
+            self._api_outage_active = True
+            # Schedule state update safely on the event loop
+            self.hass.loop.call_soon_threadsafe(self.async_schedule_update_ha_state)
+    
+    def _handle_api_restored(self, event):
+        """Handle notification of API restoration."""
+        reason = event.data.get("reason", "unknown")
+        _LOGGER.info(f"VCF {self._domain_prefix} Status sensor: API restored, reason: {reason}")
+        self._api_outage_active = False
+        self._last_known_state = None
+        self._last_known_attributes = None
+        # Schedule state update safely on the event loop
+        self.hass.loop.call_soon_threadsafe(self.async_schedule_update_ha_state)
+    
+    def _get_update_status(self):
+        """Get the actual update status from coordinator data."""
         domain_data = self.get_domain_data()
         if not domain_data:
             return "unknown"
         return domain_data.get("update_status", "unknown")
     
-    @property
-    def icon(self):
-        state = self.state
-        if state == "updates_available":
-            return "mdi:update"
-        elif state == "up_to_date":
-            return "mdi:check-circle"
-        elif state == "error":
-            return "mdi:alert-circle"
-        else:            return "mdi:sync-alert"
-    
-    @property
-    def extra_state_attributes(self):
-        """Return additional state attributes."""
+    def _get_update_attributes(self):
+        """Get the actual update attributes from coordinator data."""
         try:
             domain_data = self.get_domain_data()
             if not domain_data:
@@ -95,19 +128,6 @@ class VCFDomainUpdateStatusSensor(VCFDomainBaseSensor):
                 "current_version": domain_data.get("current_version"),
                 "update_status": domain_data.get("update_status", "unknown")
             }
-            
-            # Check if we're using preserved state during API outage
-            try:
-                coordinator_manager = getattr(self.coordinator, '_coordinator_manager', None)
-                if (coordinator_manager and 
-                    hasattr(coordinator_manager, '_is_sddc_upgrade_in_progress') and
-                    coordinator_manager._is_sddc_upgrade_in_progress):
-                    attributes["state_preserved_during_upgrade"] = True
-                    attributes["preservation_reason"] = "SDDC Manager upgrade in progress"
-                else:
-                    attributes["state_preserved_during_upgrade"] = False
-            except:
-                attributes["state_preserved_during_upgrade"] = False
             
             next_release = domain_data.get("next_release")
             if next_release:
@@ -123,6 +143,55 @@ class VCFDomainUpdateStatusSensor(VCFDomainBaseSensor):
         except Exception as e:
             _LOGGER.error(f"Error getting domain update attributes for {self._domain_name}: {e}")
             return {"error": str(e)}
+    
+    @property
+    def state(self):
+        """Return the update status of this domain."""
+        # If we're in an API outage and have preserved state, use it
+        if self._api_outage_active and self._last_known_state is not None:
+            return self._last_known_state
+        
+        return self._get_update_status()
+    
+    @property
+    def icon(self):
+        state = self.state
+        if state == "updates_available":
+            return "mdi:update"
+        elif state == "up_to_date":
+            return "mdi:check-circle"
+        elif state == "error":
+            return "mdi:alert-circle"
+        else:
+            return "mdi:sync-alert"
+    
+    @property
+    def extra_state_attributes(self):
+        """Return additional state attributes."""
+        # If we're in an API outage and have preserved attributes, use them
+        if self._api_outage_active and self._last_known_attributes is not None:
+            preserved_attributes = self._last_known_attributes.copy()
+            preserved_attributes["state_preserved_during_upgrade"] = True
+            preserved_attributes["preservation_reason"] = "SDDC Manager upgrade in progress"
+            return preserved_attributes
+        
+        # Otherwise get current attributes
+        attributes = self._get_update_attributes()
+        
+        # Check if we're using preserved state during API outage (fallback check)
+        try:
+            coordinator_manager = getattr(self.coordinator, '_coordinator_manager', None)
+            if (coordinator_manager and 
+                hasattr(coordinator_manager, '_is_sddc_upgrade_in_progress') and
+                coordinator_manager._is_sddc_upgrade_in_progress):
+                attributes["state_preserved_during_upgrade"] = True
+                attributes["preservation_reason"] = "SDDC Manager upgrade in progress"
+            else:
+                attributes["state_preserved_during_upgrade"] = False
+        except:
+            attributes["state_preserved_during_upgrade"] = False
+        
+        return attributes
 
 
 class VCFDomainCapacitySensor(VCFResourceBaseSensor):

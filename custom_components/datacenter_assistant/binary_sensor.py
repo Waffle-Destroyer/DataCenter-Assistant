@@ -170,10 +170,55 @@ class VCFUpdatesAvailableBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self._attr_unique_id = "vcf_updates_available"
         self._attr_device_class = BinarySensorDeviceClass.UPDATE
         self._attr_icon = "mdi:update"
-
-    @property
-    def is_on(self):
-        """Return True if any domain has updates available."""
+        
+        # State preservation during API outages
+        self._last_known_state = None
+        self._last_known_attributes = None
+        self._api_outage_active = False
+        
+        # Listen for API outage events
+        self._remove_listeners = []
+    
+    async def async_added_to_hass(self):
+        """Run when sensor is added to Home Assistant."""
+        await super().async_added_to_hass()
+        
+        # Listen for API outage events
+        self._remove_listeners.append(
+            self.hass.bus.async_listen("vcf_api_outage_expected", self._handle_api_outage_expected)
+        )
+        self._remove_listeners.append(
+            self.hass.bus.async_listen("vcf_api_restored", self._handle_api_restored)
+        )
+    
+    async def async_will_remove_from_hass(self):
+        """Run when sensor is removed from Home Assistant."""
+        for remove_listener in self._remove_listeners:
+            remove_listener()
+    
+    def _handle_api_outage_expected(self, event):
+        """Handle notification of expected API outage."""
+        reason = event.data.get("reason", "unknown")
+        if reason == "sddc_manager_upgrade":
+            _LOGGER.info("VCF Updates Available sensor: Preserving state during SDDC Manager upgrade")
+            self._last_known_state = self._get_updates_available()
+            self._last_known_attributes = self._get_update_attributes()
+            self._api_outage_active = True
+            # Schedule state update safely on the event loop
+            self.hass.loop.call_soon_threadsafe(self.async_schedule_update_ha_state)
+    
+    def _handle_api_restored(self, event):
+        """Handle notification of API restoration."""
+        reason = event.data.get("reason", "unknown")
+        _LOGGER.info(f"VCF Updates Available sensor: API restored, reason: {reason}")
+        self._api_outage_active = False
+        self._last_known_state = None
+        self._last_known_attributes = None
+        # Schedule state update safely on the event loop
+        self.hass.loop.call_soon_threadsafe(self.async_schedule_update_ha_state)
+    
+    def _get_updates_available(self):
+        """Get the actual updates available status from coordinator data."""
         try:
             if not self.coordinator.data:
                 return False
@@ -189,10 +234,9 @@ class VCFUpdatesAvailableBinarySensor(CoordinatorEntity, BinarySensorEntity):
         except Exception as e:
             _LOGGER.warning("Failed to check VCF update availability: %s", e)
             return False
-
-    @property
-    def extra_state_attributes(self):
-        """Return additional attributes about available updates."""
+    
+    def _get_update_attributes(self):
+        """Get the actual update attributes from coordinator data."""
         try:
             if not self.coordinator.data:
                 return {"error": "No data available"}
@@ -231,3 +275,40 @@ class VCFUpdatesAvailableBinarySensor(CoordinatorEntity, BinarySensorEntity):
         except Exception as e:
             _LOGGER.error(f"Error getting update availability attributes: {e}")
             return {"error": str(e)}
+
+    @property
+    def is_on(self):
+        """Return True if any domain has updates available."""
+        # If we're in an API outage and have preserved state, use it
+        if self._api_outage_active and self._last_known_state is not None:
+            return self._last_known_state
+        
+        return self._get_updates_available()
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional attributes about available updates."""
+        # If we're in an API outage and have preserved attributes, use them
+        if self._api_outage_active and self._last_known_attributes is not None:
+            preserved_attributes = self._last_known_attributes.copy()
+            preserved_attributes["state_preserved_during_upgrade"] = True
+            preserved_attributes["preservation_reason"] = "SDDC Manager upgrade in progress"
+            return preserved_attributes
+        
+        # Otherwise get current attributes
+        attributes = self._get_update_attributes()
+        
+        # Check if we're using preserved state during API outage (fallback check)
+        try:
+            coordinator_manager = getattr(self.coordinator, '_coordinator_manager', None)
+            if (coordinator_manager and 
+                hasattr(coordinator_manager, '_is_sddc_upgrade_in_progress') and
+                coordinator_manager._is_sddc_upgrade_in_progress):
+                attributes["state_preserved_during_upgrade"] = True
+                attributes["preservation_reason"] = "SDDC Manager upgrade in progress"
+            else:
+                attributes["state_preserved_during_upgrade"] = False
+        except:
+            attributes["state_preserved_during_upgrade"] = False
+        
+        return attributes
