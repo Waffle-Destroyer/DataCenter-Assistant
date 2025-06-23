@@ -973,6 +973,15 @@ Waiting for acknowledgement..."""
                                 
                                 if status == "COMPLETED_WITH_SUCCESS":
                                     _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade completed successfully (verified)")
+                                    _LOGGER.info(f"Domain {domain_id}: API is back online but waiting 15 minutes for full system stabilization before continuing upgrades...")
+                                    
+                                    # Wait 15 minutes for API to fully stabilize after SDDC Manager upgrade
+                                    # The API may respond to basic calls but not be ready for complex operations like NSX upgrades
+                                    stabilization_time = 900  # 15 minutes in seconds
+                                    await asyncio.sleep(stabilization_time)
+                                    
+                                    _LOGGER.info(f"Domain {domain_id}: API stabilization period complete, resuming upgrade operations")
+                                    
                                     # Fire event to notify coordinators that API is back
                                     def fire_api_restored_event():
                                         self.hass.bus.fire(
@@ -992,17 +1001,26 @@ Waiting for acknowledgement..."""
                                 else:
                                     _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade still in progress: {status}")
                                     # Continue monitoring
-                                    
                             except Exception as upgrade_check_error:
                                 # If we can't check upgrade status, try to verify completion by checking domain version
                                 _LOGGER.warning(f"Domain {domain_id}: Cannot check upgrade status, verifying by domain version: {upgrade_check_error}")
                                 
-                                try:                                    # Get current domain version
+                                try:
+                                    # Get current domain version
                                     releases_data = await self.vcf_client.api_request("/v1/releases", params={"domainId": domain_id}, allow_recovery_refresh=True)
                                     current_version = releases_data.get("elements", [{}])[0].get("version") if releases_data.get("elements") else None
                                     
                                     if current_version and current_version == target_version:
                                         _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade completed successfully (verified by version match: {current_version})")
+                                        _LOGGER.info(f"Domain {domain_id}: API is back online but waiting 15 minutes for full system stabilization before continuing upgrades...")
+                                        
+                                        # Wait 15 minutes for API to fully stabilize after SDDC Manager upgrade
+                                        # The API may respond to basic calls but not be ready for complex operations like NSX upgrades
+                                        stabilization_time = 900  # 15 minutes in seconds
+                                        await asyncio.sleep(stabilization_time)
+                                        
+                                        _LOGGER.info(f"Domain {domain_id}: API stabilization period complete, resuming upgrade operations")
+                                        
                                         # Fire event to notify coordinators that API is back
                                         def fire_api_restored_event():
                                             self.hass.bus.fire(
