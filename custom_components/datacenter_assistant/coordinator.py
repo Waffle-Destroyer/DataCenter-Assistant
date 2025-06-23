@@ -181,9 +181,9 @@ class VCFCoordinatorManager:
             return current_data
             
         except Exception as e:
-            _LOGGER.error(f"Error in VCF update check workflow: {e}")
-              # Check if we should preserve state during expected outage
+            # Check if we should preserve state during expected outage
             if self._should_preserve_state(e):
+                _LOGGER.debug(f"VCF update check temporarily unavailable during SDDC Manager upgrade: {e}")
                 if self._last_successful_data:
                     _LOGGER.info("Preserving last known state during SDDC Manager upgrade API outage")
                     # Log what we're preserving for verification
@@ -201,6 +201,9 @@ class VCFCoordinatorManager:
                     return self._last_successful_data
                 else:
                     _LOGGER.warning("No previous state to preserve during API outage")
+            else:
+                # Only log as ERROR if this is not an expected outage
+                _LOGGER.error(f"Error in VCF update check workflow: {e}")
             
             return {"domains": [], "domain_updates": {}, "error": str(e)}
     
@@ -312,22 +315,23 @@ class VCFCoordinatorManager:
                 self._last_successful_resource_data = current_data
             elif not self._is_sddc_upgrade_in_progress:
                 self._last_successful_resource_data = current_data
-            
-            # Reset temporary outage tracking on successful resource collection
+              # Reset temporary outage tracking on successful resource collection
             self._reset_temporary_outage_tracking()
             
             return current_data
             
         except Exception as e:
-            _LOGGER.error(f"Error in VCF resource collection workflow: {e}")
-            
             # Check if we should preserve state during expected outage
             if self._should_preserve_state(e):
+                _LOGGER.debug(f"VCF resource collection temporarily unavailable during SDDC Manager upgrade: {e}")
                 if hasattr(self, '_last_successful_resource_data') and self._last_successful_resource_data:
                     _LOGGER.info("Preserving last known resource state during SDDC Manager upgrade API outage")
                     return self._last_successful_resource_data
                 else:
                     _LOGGER.warning("No previous resource state to preserve during API outage")
+            else:
+                # Only log as ERROR if this is not an expected outage
+                _LOGGER.error(f"Error in VCF resource collection workflow: {e}")
             
             return {"domains": [], "domain_resources": {}, "error": str(e)}
     
