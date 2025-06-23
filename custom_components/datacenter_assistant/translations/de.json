@@ -11,12 +11,16 @@
           "vcf_password": "VCF Passwort"
         }
       }
-    },
-    "error": {
+    },    "error": {
       "missing_vcf_url": "VCF URL ist erforderlich",
       "invalid_vcf_url": "VCF URL Format ist ungültig. Bitte verwenden Sie eine gültige URL (z.B. https://vcf-manager.example.com)",
       "missing_vcf_username": "VCF Benutzername ist erforderlich", 
-      "missing_vcf_password": "VCF Passwort ist erforderlich"
+      "missing_vcf_password": "VCF Passwort ist erforderlich",
+      "invalid_credentials": "Ungültiger Benutzername oder Passwort. Bitte überprüfen Sie Ihre Anmeldedaten.",
+      "access_forbidden": "Zugriff verweigert. Ihre IP könnte aufgrund mehrerer fehlgeschlagener Anmeldeversuche vorübergehend blockiert sein.",
+      "too_many_failed_attempts": "Zu viele fehlgeschlagene Versuche. Sie könnten für 24 Stunden IP-gesperrt werden, wenn Sie weiterhin falsche Anmeldedaten eingeben. Falls Sie gesperrt werden, müssen Sie sich mit der SDDC Manager Konsole verbinden und 'systemctl restart commonsvcs' ausführen oder 24 Stunden warten.",
+      "connection_error": "Verbindung zum VCF Manager nicht möglich. Bitte überprüfen Sie Ihre URL und Netzwerkverbindung.",
+      "unknown_error": "Ein unerwarteter Fehler ist aufgetreten. Bitte versuchen Sie es erneut."
     }
   }
 }
