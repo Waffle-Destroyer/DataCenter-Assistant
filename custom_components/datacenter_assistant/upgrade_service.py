@@ -961,13 +961,13 @@ Waiting for acknowledgement..."""
                     if current_time - last_connectivity_check >= 300:  # 5 minutes
                         try:
                             _LOGGER.debug(f"Domain {domain_id}: Testing if API is back online...")
-                            await self.vcf_client.api_request("/v1/domains")
+                            await self.vcf_client.api_request("/v1/domains", allow_recovery_refresh=True)
                             _LOGGER.info(f"Domain {domain_id}: API is back online after SDDC Manager upgrade")
                             api_available = True
                             
                             # Try to check the actual upgrade status first
                             try:
-                                status_response = await self.vcf_client.api_request(f"/v1/upgrades/{upgrade_id}")
+                                status_response = await self.vcf_client.api_request(f"/v1/upgrades/{upgrade_id}", allow_recovery_refresh=True)
                                 status = status_response.get("status")
                                 _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade status after API restoration: {status}")
                                 
@@ -997,9 +997,8 @@ Waiting for acknowledgement..."""
                                 # If we can't check upgrade status, try to verify completion by checking domain version
                                 _LOGGER.warning(f"Domain {domain_id}: Cannot check upgrade status, verifying by domain version: {upgrade_check_error}")
                                 
-                                try:
-                                    # Get current domain version
-                                    releases_data = await self.vcf_client.api_request("/v1/releases", params={"domainId": domain_id})
+                                try:                                    # Get current domain version
+                                    releases_data = await self.vcf_client.api_request("/v1/releases", params={"domainId": domain_id}, allow_recovery_refresh=True)
                                     current_version = releases_data.get("elements", [{}])[0].get("version") if releases_data.get("elements") else None
                                     
                                     if current_version and current_version == target_version:

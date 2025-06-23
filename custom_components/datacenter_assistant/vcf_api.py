@@ -130,14 +130,17 @@ class VCFAPIClient:
         }
         return session, headers
     
-    async def refresh_token(self):
-        """Refresh VCF API token with upgrade-aware handling."""
+    async def refresh_token(self, allow_recovery_refresh=False):
+        """Refresh VCF API token with upgrade-aware handling.
+        
+        Args:
+            allow_recovery_refresh: If True, allows token refresh even during upgrades for recovery testing
+        """
         if not self.vcf_url or not self.vcf_username or not self.vcf_password:
             _LOGGER.warning("Cannot refresh VCF token: Missing credentials")
             return None
-        
-        # Silence token refresh attempts during SDDC Manager upgrades
-        if self._should_silence_token_refresh():
+          # Silence token refresh attempts during SDDC Manager upgrades (unless recovery is allowed)
+        if self._should_silence_token_refresh() and not allow_recovery_refresh:
             _LOGGER.debug("Silencing VCF token refresh during SDDC Manager upgrade (API unavailable)")
             return None
             
@@ -187,8 +190,12 @@ class VCFAPIClient:
                 _LOGGER.error(f"Error refreshing VCF token: {e}")
             return None
     
-    async def api_request(self, endpoint, method="GET", data=None, params=None, timeout=None):
-        """Make a VCF API request with automatic token handling and upgrade-aware error handling."""
+    async def api_request(self, endpoint, method="GET", data=None, params=None, timeout=None, allow_recovery_refresh=False):
+        """Make a VCF API request with automatic token handling and upgrade-aware error handling.
+        
+        Args:
+            allow_recovery_refresh: If True, allows token refresh even during upgrades for recovery testing
+        """
         if not self.vcf_url:
             raise ValueError("VCF URL not configured")
         
@@ -212,12 +219,15 @@ class VCFAPIClient:
             ) as resp:
                 if resp.status == 401:
                     # Try refreshing token once
-                    if self._should_silence_token_refresh():
+                    if self._should_silence_token_refresh() and not allow_recovery_refresh:
                         _LOGGER.debug("Token expired during SDDC Manager upgrade, silencing token refresh attempt")
                         raise aiohttp.ClientError("API unavailable during SDDC Manager upgrade")
                     
-                    _LOGGER.info("Token expired, refreshing...")
-                    new_token = await self.refresh_token()
+                    if allow_recovery_refresh:
+                        _LOGGER.info("Token expired during upgrade recovery test, attempting refresh...")
+                    else:
+                        _LOGGER.info("Token expired, refreshing...")
+                    new_token = await self.refresh_token(allow_recovery_refresh=allow_recovery_refresh)
                     if new_token:
                         headers["Authorization"] = f"Bearer {new_token}"
                         async with getattr(session, method.lower())(
