@@ -2,6 +2,7 @@ import logging
 from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorDeviceClass
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .coordinator import get_coordinator
+from .utils import validate_and_normalize_version
 
 _LOGGER = logging.getLogger(__name__)
 _DOMAIN = "datacenter_assistant"
@@ -255,6 +256,22 @@ class VCFUpdatesAvailableBinarySensor(CoordinatorEntity, BinarySensorEntity):
             
             for domain_id, domain_data in domain_updates.items():
                 status = domain_data.get("update_status", "unknown")
+                
+                # Additional safety check: validate next_version if domain claims to have updates
+                if status == "updates_available":
+                    next_release = domain_data.get("next_release", {})
+                    next_version = next_release.get("version")
+                    
+                    # Validate the next version to catch any invalid values that slipped through
+                    if next_version:
+                        is_valid, normalized, error_msg = validate_and_normalize_version(next_version)
+                        if not is_valid:
+                            _LOGGER.warning(f"Domain {domain_data.get('domain_name')}: Invalid next version '{next_version}' detected in UI, forcing error state. Error: {error_msg}")
+                            status = "error"  # Force to error state for safety
+                    else:
+                        _LOGGER.warning(f"Domain {domain_data.get('domain_name')}: Missing next version but status is 'updates_available', forcing error state")
+                        status = "error"  # Force to error state for safety
+                
                 status_counts[status] = status_counts.get(status, 0) + 1
                 
                 if status == "updates_available":

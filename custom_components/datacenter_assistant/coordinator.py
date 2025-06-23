@@ -106,22 +106,10 @@ class VCFCoordinatorManager:
                         _LOGGER.info("SDDC Manager upgrade detected (fallback), preserving last known state during API outage")
                     return True
                 
-                # Even without confirmed upgrade, temporarily preserve state for common outage errors
-                # This provides better UX during brief API instabilities
-                if not hasattr(self, '_temporary_outage_start'):
-                    self._temporary_outage_start = time.time()
-                    _LOGGER.info(f"Detected potential API outage ({error_str}), temporarily preserving state")
-                    return True
-                elif time.time() - self._temporary_outage_start < 300:  # 5 minutes max for temporary preservation
-                    return True
-                else:
-                    _LOGGER.warning("Temporary state preservation timeout exceeded, resuming normal error handling")
-                    delattr(self, '_temporary_outage_start')
-                    return False
-            
-            # Reset temporary outage tracking for non-outage errors
-            if hasattr(self, '_temporary_outage_start'):
-                delattr(self, '_temporary_outage_start')
+                # Do NOT preserve state for simple network outages when no upgrade is in progress
+                # This ensures domains show as "error" when SDDC Manager is down, not "up_to_date"
+                _LOGGER.debug(f"API outage detected ({error_str}) but no SDDC upgrade in progress - treating as error")
+                return False
             
             return False
             
@@ -467,10 +455,8 @@ class VCFCoordinatorManager:
 
     def _reset_temporary_outage_tracking(self):
         """Reset temporary outage tracking when normal operations resume."""
-        if hasattr(self, '_temporary_outage_start'):
-            outage_duration = time.time() - self._temporary_outage_start
-            _LOGGER.info(f"API connectivity restored after {outage_duration:.1f} seconds, resuming normal operations")
-            delattr(self, '_temporary_outage_start')
+        # Temporary outage tracking was removed - only SDDC upgrade outages are tracked now
+        pass
 def get_coordinator(hass, config_entry):
     """Get the data update coordinator using OOP approach."""
     coordinator_manager = VCFCoordinatorManager(hass, config_entry)
