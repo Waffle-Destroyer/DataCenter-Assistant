@@ -76,6 +76,16 @@ class VCFCoordinatorManager:
     def _should_preserve_state(self, error):
         """Determine if we should preserve the last known state during an API error."""
         try:
+            # Check for specific API outage error patterns that suggest temporary infrastructure issues
+            error_str = str(error).lower()
+            is_api_outage_error = (
+                "502" in error_str or  # Bad Gateway errors
+                "503" in error_str or  # Service Unavailable
+                "connect call failed" in error_str or  # Connection failures
+                "connection timeout" in error_str or  # Timeout errors
+                "cannot connect to host" in error_str  # Host unreachable
+            )
+            
             # Primary check: Are we in a known SDDC upgrade state via events?
             if self._is_sddc_upgrade_in_progress and self._api_outage_start_time:
                 # Check if we're within the timeout window
@@ -87,12 +97,31 @@ class VCFCoordinatorManager:
                     self._is_sddc_upgrade_in_progress = False
                     return False
             
-            # Fallback check: Look for SDDC Manager upgrade in progress (less reliable)
-            if self._is_upgrade_in_progress():
-                if self._api_outage_start_time is None:
-                    self._api_outage_start_time = time.time()
-                    _LOGGER.info("SDDC Manager upgrade detected (fallback), preserving last known state during API outage")
-                return True
+            # Secondary check: If we see typical API outage errors, check for upgrade in progress
+            if is_api_outage_error:
+                # Fallback check: Look for SDDC Manager upgrade in progress (less reliable)
+                if self._is_upgrade_in_progress():
+                    if self._api_outage_start_time is None:
+                        self._api_outage_start_time = time.time()
+                        _LOGGER.info("SDDC Manager upgrade detected (fallback), preserving last known state during API outage")
+                    return True
+                
+                # Even without confirmed upgrade, temporarily preserve state for common outage errors
+                # This provides better UX during brief API instabilities
+                if not hasattr(self, '_temporary_outage_start'):
+                    self._temporary_outage_start = time.time()
+                    _LOGGER.info(f"Detected potential API outage ({error_str}), temporarily preserving state")
+                    return True
+                elif time.time() - self._temporary_outage_start < 300:  # 5 minutes max for temporary preservation
+                    return True
+                else:
+                    _LOGGER.warning("Temporary state preservation timeout exceeded, resuming normal error handling")
+                    delattr(self, '_temporary_outage_start')
+                    return False
+            
+            # Reset temporary outage tracking for non-outage errors
+            if hasattr(self, '_temporary_outage_start'):
+                delattr(self, '_temporary_outage_start')
             
             return False
             
@@ -142,8 +171,8 @@ class VCFCoordinatorManager:
                 "domain_updates": domain_updates
             }
             self._last_successful_data = current_data
-            
-            # Reset outage tracking on successful fetch
+              # Reset outage tracking on successful fetch
+            self._reset_temporary_outage_tracking()
             if self._api_outage_start_time and not self._is_upgrade_in_progress():
                 _LOGGER.info("API connectivity restored, resuming normal operations")
                 self._api_outage_start_time = None
@@ -278,12 +307,14 @@ class VCFCoordinatorManager:
                 "domains": active_domains,
                 "domain_resources": domain_resources
             }
-            
-            # Update last successful data if this is not a preserved state fetch
+              # Update last successful data if this is not a preserved state fetch
             if not hasattr(self, '_last_successful_resource_data'):
                 self._last_successful_resource_data = current_data
             elif not self._is_sddc_upgrade_in_progress:
                 self._last_successful_resource_data = current_data
+            
+            # Reset temporary outage tracking on successful resource collection
+            self._reset_temporary_outage_tracking()
             
             return current_data
             
@@ -328,7 +359,12 @@ class VCFCoordinatorManager:
                 domain_resources[domain_id] = domain_resource_data
                 
             except Exception as e:
-                _LOGGER.error(f"Error getting resource information for domain {domain['name']}: {e}")
+                # Use upgrade-aware error logging
+                if self._should_preserve_state(e):
+                    _LOGGER.debug(f"Silencing resource collection error for domain {domain['name']} during SDDC Manager upgrade: {e}")
+                else:
+                    _LOGGER.error(f"Error getting resource information for domain {domain['name']}: {e}")
+                
                 domain_resources[domain["id"]] = {
                     "domain_name": domain["name"],
                     "domain_prefix": domain["prefix"],
@@ -350,8 +386,7 @@ class VCFCoordinatorManager:
             "capacity": domain_details.get("capacity", {}),
             "clusters": []
         }
-        
-        # Process clusters
+          # Process clusters
         clusters_info = domain_details.get("clusters", [])
         for cluster_ref in clusters_info:
             cluster_id = cluster_ref.get("id")
@@ -360,7 +395,11 @@ class VCFCoordinatorManager:
                     cluster_data = await self._get_cluster_data(cluster_id)
                     domain_resource_data["clusters"].append(cluster_data)
                 except Exception as e:
-                    _LOGGER.error(f"Error getting cluster details for {cluster_id}: {e}")
+                    # Use upgrade-aware error logging
+                    if self._should_preserve_state(e):
+                        _LOGGER.debug(f"Silencing cluster data collection error for {cluster_id} during SDDC Manager upgrade: {e}")
+                    else:
+                        _LOGGER.error(f"Error getting cluster details for {cluster_id}: {e}")
         
         return domain_resource_data
     
@@ -374,8 +413,7 @@ class VCFCoordinatorManager:
             "host_count": len(cluster_details.get("hosts", [])),
             "hosts": []
         }
-        
-        # Process hosts
+          # Process hosts
         hosts_info = cluster_details.get("hosts", [])
         for host_ref in hosts_info:
             host_id = host_ref.get("id")
@@ -384,7 +422,11 @@ class VCFCoordinatorManager:
                     host_data = await self._get_host_data(host_id)
                     cluster_data["hosts"].append(host_data)
                 except Exception as e:
-                    _LOGGER.error(f"Error getting host details for {host_id}: {e}")
+                    # Use upgrade-aware error logging
+                    if self._should_preserve_state(e):
+                        _LOGGER.debug(f"Silencing host data collection error for {host_id} during SDDC Manager upgrade: {e}")
+                    else:
+                        _LOGGER.error(f"Error getting host details for {host_id}: {e}")
         
         return cluster_data
     
@@ -419,6 +461,12 @@ class VCFCoordinatorManager:
             }
         }
 
+    def _reset_temporary_outage_tracking(self):
+        """Reset temporary outage tracking when normal operations resume."""
+        if hasattr(self, '_temporary_outage_start'):
+            outage_duration = time.time() - self._temporary_outage_start
+            _LOGGER.info(f"API connectivity restored after {outage_duration:.1f} seconds, resuming normal operations")
+            delattr(self, '_temporary_outage_start')
 def get_coordinator(hass, config_entry):
     """Get the data update coordinator using OOP approach."""
     coordinator_manager = VCFCoordinatorManager(hass, config_entry)
