@@ -116,9 +116,12 @@ class VCFAPIClient:
         
         # Check if token expires in less than 10 minutes
         if current_expiry > 0 and time.time() > current_expiry - 600:
-            # Always attempt proactive token refresh - refresh_token() handles upgrade silencing
-            _LOGGER.info("VCF token will expire soon, refreshing proactively")
-            current_token = await self.refresh_token()
+            # Do not proactively refresh during an upgrade; let reactive handling do it.
+            if not self._is_upgrade_in_progress():
+                _LOGGER.info("VCF token will expire soon, refreshing proactively")
+                current_token = await self.refresh_token()
+            else:
+                _LOGGER.debug("Proactive token refresh skipped during SDDC Manager upgrade.")
         
         session = async_get_clientsession(self.hass)
         headers = {
@@ -204,28 +207,24 @@ class VCFAPIClient:
                 url, headers=headers, json=data, params=params, ssl=False, timeout=timeout
             ) as resp:
                 if resp.status == 401:
-                    # Try refreshing token once
-                    if self._should_silence_token_refresh():
-                        _LOGGER.debug("Token expired during SDDC Manager upgrade, silencing token refresh attempt")
-                        raise aiohttp.ClientError("API unavailable during SDDC Manager upgrade")
-                    
-                    _LOGGER.info("Token expired, refreshing...")
+                    _LOGGER.info("Token expired, attempting to refresh...")
                     new_token = await self.refresh_token()
+                    
                     if new_token:
+                        _LOGGER.info("Token refreshed successfully, retrying the API request.")
                         headers["Authorization"] = f"Bearer {new_token}"
+                        # Retry the request with the new token
                         async with getattr(session, method.lower())(
                             url, headers=headers, json=data, params=params, ssl=False, timeout=timeout
                         ) as retry_resp:
                             if retry_resp.status not in [200, 202, 204]:
                                 error_text = await retry_resp.text()
-                                # Check if this is during an upgrade before logging error
                                 if self._is_upgrade_in_progress():
-                                    _LOGGER.debug(f"API request silently failed during SDDC Manager upgrade after token refresh: {retry_resp.status} for URL: {url}")
+                                    _LOGGER.debug(f"API request silently failed after token refresh during upgrade: {retry_resp.status} for {url}")
                                 else:
                                     _LOGGER.error(f"API request failed after token refresh: {retry_resp.status} - {error_text} for URL: {url}")
-                                raise aiohttp.ClientError(f"API request failed: {retry_resp.status}")
+                                raise aiohttp.ClientError(f"API request failed after refresh: {retry_resp.status}")
                             
-                            # Try to parse as JSON, but handle empty responses for PATCH/PUT/DELETE
                             try:
                                 return await retry_resp.json()
                             except aiohttp.ContentTypeError:
@@ -234,7 +233,13 @@ class VCFAPIClient:
                                 else:
                                     raise
                     else:
-                        raise aiohttp.ClientError("Failed to refresh token")
+                        # If token refresh fails, handle gracefully during an upgrade
+                        if self._is_upgrade_in_progress():
+                            _LOGGER.debug("Token refresh failed during SDDC Manager upgrade. API is likely still unavailable.")
+                            raise aiohttp.ClientError("API unavailable during SDDC Manager upgrade.")
+                        else:
+                            _LOGGER.error("Failed to refresh token, and not in upgrade mode.")
+                            raise aiohttp.ClientError("Failed to refresh token")
                 elif resp.status not in [200, 202, 204]:
                     error_text = await resp.text()
                     # Check if this is during an upgrade before logging error
