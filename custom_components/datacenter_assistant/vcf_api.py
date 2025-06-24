@@ -116,12 +116,9 @@ class VCFAPIClient:
         
         # Check if token expires in less than 10 minutes
         if current_expiry > 0 and time.time() > current_expiry - 600:
-            # Don't attempt proactive token refresh during SDDC Manager upgrades
-            if self._should_silence_token_refresh():
-                _LOGGER.debug("VCF token will expire soon, but silencing refresh during SDDC Manager upgrade")
-            else:
-                _LOGGER.info("VCF token will expire soon, refreshing proactively")
-                current_token = await self.refresh_token()
+            # Always attempt proactive token refresh - refresh_token() handles upgrade silencing
+            _LOGGER.info("VCF token will expire soon, refreshing proactively")
+            current_token = await self.refresh_token()
         
         session = async_get_clientsession(self.hass)
         headers = {
@@ -130,20 +127,13 @@ class VCFAPIClient:
         }
         return session, headers
     
-    async def refresh_token(self, allow_recovery_refresh=False):
-        """Refresh VCF API token with upgrade-aware handling.
-        
-        Args:
-            allow_recovery_refresh: If True, allows token refresh even during upgrades for recovery testing
-        """
+    async def refresh_token(self):
+        """Refresh VCF API token with upgrade-aware handling."""
         if not self.vcf_url or not self.vcf_username or not self.vcf_password:
             _LOGGER.warning("Cannot refresh VCF token: Missing credentials")
             return None
-          # Silence token refresh attempts during SDDC Manager upgrades (unless recovery is allowed)
-        if self._should_silence_token_refresh() and not allow_recovery_refresh:
-            _LOGGER.debug("Silencing VCF token refresh during SDDC Manager upgrade (API unavailable)")
-            return None
             
+        # Always attempt token refresh, just handle errors differently during upgrades
         try:
             session = async_get_clientsession(self.hass)
             login_url = build_vcf_api_url(self.vcf_url, "/v1/tokens")
@@ -183,19 +173,15 @@ class VCFAPIClient:
                     _LOGGER.warning("Could not extract token from response")
                     return None
         except Exception as e:
-            # Check if this is during an upgrade before logging error
-            if self._is_upgrade_in_progress():
-                _LOGGER.debug(f"VCF token refresh silently failed during SDDC Manager upgrade: {e}")
+            # Use upgrade-aware error logging
+            if self._should_silence_token_refresh():
+                _LOGGER.debug(f"VCF token refresh failed during SDDC Manager upgrade (expected): {e}")
             else:
                 _LOGGER.error(f"Error refreshing VCF token: {e}")
             return None
     
-    async def api_request(self, endpoint, method="GET", data=None, params=None, timeout=None, allow_recovery_refresh=False):
-        """Make a VCF API request with automatic token handling and upgrade-aware error handling.
-        
-        Args:
-            allow_recovery_refresh: If True, allows token refresh even during upgrades for recovery testing
-        """
+    async def api_request(self, endpoint, method="GET", data=None, params=None, timeout=None):
+        """Make a VCF API request with automatic token handling and upgrade-aware error handling."""
         if not self.vcf_url:
             raise ValueError("VCF URL not configured")
         
@@ -219,15 +205,12 @@ class VCFAPIClient:
             ) as resp:
                 if resp.status == 401:
                     # Try refreshing token once
-                    if self._should_silence_token_refresh() and not allow_recovery_refresh:
+                    if self._should_silence_token_refresh():
                         _LOGGER.debug("Token expired during SDDC Manager upgrade, silencing token refresh attempt")
                         raise aiohttp.ClientError("API unavailable during SDDC Manager upgrade")
                     
-                    if allow_recovery_refresh:
-                        _LOGGER.info("Token expired during upgrade recovery test, attempting refresh...")
-                    else:
-                        _LOGGER.info("Token expired, refreshing...")
-                    new_token = await self.refresh_token(allow_recovery_refresh=allow_recovery_refresh)
+                    _LOGGER.info("Token expired, refreshing...")
+                    new_token = await self.refresh_token()
                     if new_token:
                         headers["Authorization"] = f"Bearer {new_token}"
                         async with getattr(session, method.lower())(
