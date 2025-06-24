@@ -928,17 +928,6 @@ Waiting for acknowledgement..."""
                     if not api_available:
                         _LOGGER.info(f"Domain {domain_id}: API connectivity restored during SDDC Manager upgrade")
                         api_available = True
-                        # Fire event to notify coordinators that API is back
-                        def fire_api_restored_event():
-                            self.hass.bus.fire(
-                                "vcf_api_restored",
-                                {"domain_id": domain_id, "reason": "sddc_manager_upgrade"}
-                            )
-                        
-                        if hasattr(self.hass, 'loop') and self.hass.loop.is_running():
-                            self.hass.loop.call_soon_threadsafe(fire_api_restored_event)
-                        else:
-                            fire_api_restored_event()
                     
                     _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade status: {status}")
                     
@@ -955,114 +944,43 @@ Waiting for acknowledgement..."""
                     if api_available:
                         _LOGGER.info(f"Domain {domain_id}: API became unavailable during SDDC Manager upgrade (expected): {api_error}")
                         api_available = False
-                        
-                    # Periodically test if API is back online (every 5 minutes)
-                    current_time = check_count * 30  # 30 seconds per check
-                    if current_time - last_connectivity_check >= 300:  # 5 minutes
-                        try:
-                            _LOGGER.debug(f"Domain {domain_id}: Testing if API is back online...")
-                            await self.vcf_client.api_request("/v1/domains", allow_recovery_refresh=True)
-                            _LOGGER.info(f"Domain {domain_id}: API is back online after SDDC Manager upgrade")
-                            api_available = True
-                            
-                            # Try to check the actual upgrade status first
-                            try:
-                                status_response = await self.vcf_client.api_request(f"/v1/upgrades/{upgrade_id}", allow_recovery_refresh=True)
-                                status = status_response.get("status")
-                                _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade status after API restoration: {status}")
-                                
-                                if status == "COMPLETED_WITH_SUCCESS":
-                                    _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade completed successfully (verified)")
-                                    _LOGGER.info(f"Domain {domain_id}: API is back online but waiting 15 minutes for full system stabilization before continuing upgrades...")
-                                    
-                                    # Wait 15 minutes for API to fully stabilize after SDDC Manager upgrade
-                                    # The API may respond to basic calls but not be ready for complex operations like NSX upgrades
-                                    stabilization_time = 900  # 15 minutes in seconds
-                                    await asyncio.sleep(stabilization_time)
-                                    
-                                    _LOGGER.info(f"Domain {domain_id}: API stabilization period complete, resuming upgrade operations")
-                                    
-                                    # Fire event to notify coordinators that API is back
-                                    def fire_api_restored_event():
-                                        self.hass.bus.fire(
-                                            "vcf_api_restored",
-                                            {"domain_id": domain_id, "reason": "sddc_manager_upgrade"}
-                                        )
-                                    
-                                    if hasattr(self.hass, 'loop') and self.hass.loop.is_running():
-                                        self.hass.loop.call_soon_threadsafe(fire_api_restored_event)
-                                    else:
-                                        fire_api_restored_event()
-                                    break
-                                elif status in ["FAILED", "COMPLETED_WITH_FAILURE"]:
-                                    error_msg = f"SDDC Manager upgrade failed with status: {status}"
-                                    _LOGGER.error(f"Domain {domain_id}: {error_msg}")
-                                    raise Exception(error_msg)
-                                else:
-                                    _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade still in progress: {status}")
-                                    # Continue monitoring
-                            except Exception as upgrade_check_error:
-                                # If we can't check upgrade status, try to verify completion by checking domain version
-                                _LOGGER.warning(f"Domain {domain_id}: Cannot check upgrade status, verifying by domain version: {upgrade_check_error}")
-                                
-                                try:
-                                    # Get current domain version
-                                    releases_data = await self.vcf_client.api_request("/v1/releases", params={"domainId": domain_id}, allow_recovery_refresh=True)
-                                    current_version = releases_data.get("elements", [{}])[0].get("version") if releases_data.get("elements") else None
-                                    
-                                    if current_version and current_version == target_version:
-                                        _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade completed successfully (verified by version match: {current_version})")
-                                        _LOGGER.info(f"Domain {domain_id}: API is back online but waiting 15 minutes for full system stabilization before continuing upgrades...")
-                                        
-                                        # Wait 15 minutes for API to fully stabilize after SDDC Manager upgrade
-                                        # The API may respond to basic calls but not be ready for complex operations like NSX upgrades
-                                        stabilization_time = 900  # 15 minutes in seconds
-                                        await asyncio.sleep(stabilization_time)
-                                        
-                                        _LOGGER.info(f"Domain {domain_id}: API stabilization period complete, resuming upgrade operations")
-                                        
-                                        # Fire event to notify coordinators that API is back
-                                        def fire_api_restored_event():
-                                            self.hass.bus.fire(
-                                                "vcf_api_restored",
-                                                {"domain_id": domain_id, "reason": "sddc_manager_upgrade"}
-                                            )
-                                        
-                                        if hasattr(self.hass, 'loop') and self.hass.loop.is_running():
-                                            self.hass.loop.call_soon_threadsafe(fire_api_restored_event)
-                                        else:
-                                            fire_api_restored_event()
-                                        break
-                                    else:
-                                        _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade still in progress (current: {current_version}, target: {target_version})")
-                                        
-                                except Exception as version_check_error:
-                                    _LOGGER.warning(f"Domain {domain_id}: Cannot verify upgrade completion by version: {version_check_error}")
-                                    # As last resort, assume upgrade is in progress and continue monitoring
-                            
-                            last_connectivity_check = current_time
-                            
-                        except Exception as test_error:
-                            _LOGGER.debug(f"Domain {domain_id}: API still not available: {test_error}")
-                            last_connectivity_check = current_time
                 
                 _LOGGER.debug(f"Domain {domain_id}: Waiting 30 seconds before next SDDC Manager upgrade status check...")
                 await asyncio.sleep(30)
             
-            _LOGGER.info(f"SDDC Manager upgrade completed for domain {domain_id}")
+            _LOGGER.info(f"Domain {domain_id}: SDDC Manager upgrade finished. Waiting 15 minutes for full system stabilization...")
             
-        except Exception as e:
-            # Fire event to notify coordinators that API should be restored
+            stabilization_time = 900  # 15 minutes in seconds
+            await asyncio.sleep(stabilization_time)
+            
+            _LOGGER.info(f"Domain {domain_id}: API stabilization period complete. Resuming upgrade operations.")
+            
+            # Fire event to notify coordinators that the API is restored and fully operational.
             def fire_api_restored_event():
                 self.hass.bus.fire(
                     "vcf_api_restored",
-                    {"domain_id": domain_id, "reason": "sddc_manager_upgrade_failed"}
+                    {"domain_id": domain_id, "reason": "sddc_manager_upgrade"}
                 )
             
             if hasattr(self.hass, 'loop') and self.hass.loop.is_running():
                 self.hass.loop.call_soon_threadsafe(fire_api_restored_event)
             else:
                 fire_api_restored_event()
+            
+            _LOGGER.info(f"SDDC Manager upgrade process fully completed for domain {domain_id}")
+
+        except Exception as e:
+            # Fire event to notify coordinators that API should be restored in case of failure
+            def fire_api_restored_event_on_fail():
+                self.hass.bus.fire(
+                    "vcf_api_restored",
+                    {"domain_id": domain_id, "reason": "sddc_manager_upgrade_failed"}
+                )
+            
+            if hasattr(self.hass, 'loop') and self.hass.loop.is_running():
+                self.hass.loop.call_soon_threadsafe(fire_api_restored_event_on_fail)
+            else:
+                fire_api_restored_event_on_fail()
             
             raise Exception(f"SDDC Manager upgrade failed: {e}")
     
